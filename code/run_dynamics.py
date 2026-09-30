@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Segment 2: Run molecular dynamics using ASE with Fairchem UMA calculator.
+Run single-point, geometry-optimization or MD calculations using ASE with
+the Fairchem UMA calculator.
 
 This script loads an XYZ file, sets up the UMA ML potential from Fairchem,
-runs MD simulation, and writes a trajectory XYZ file with gradients included.
+and runs one of three calculation modes:
+  sp   - single-point energy/force calculation
+  opt  - geometry optimization
+  md   - molecular dynamics (trajectory XYZ output; forces optional)
 """
 
 import argparse
@@ -14,14 +18,110 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from ase import Atoms
-from ase.io import read, write
-from ase.md.verlet import VelocityVerlet
-from ase.md.langevin import Langevin
 from ase import units
+from ase.io import read, write
+from ase.md.langevin import Langevin
+from ase.md.verlet import VelocityVerlet
 
 # Fairchem calculator for UMA potential
 from fairchem.core import FAIRChemCalculator, pretrained_mlip
+
+
+DEFAULT_CHECKPOINT = "uma-s-1p2p1"
+
+
+def setup_calculator(atoms, checkpoint: str):
+    """Attach the UMA calculator to an Atoms object and return it."""
+    # Set charge and spin for the UMA calculator (avoids warnings and
+    # potential errors)
+    atoms.info["charge"] = 0
+    atoms.info["spin"] = 1
+
+    # Uses HuggingFace API token from environment
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    predictor = pretrained_mlip.get_predict_unit(checkpoint, device=device)
+    atoms.calc = FAIRChemCalculator(predictor, task_name="omol")
+    return atoms
+
+
+def write_frames(frames, output_xyz: str, include_forces: bool) -> None:
+    """Write Atoms frames to an extended XYZ file.
+
+    With include_forces=True forces are written as fx/fy/fz columns; with
+    False the file is positions-only.
+    """
+    output = Path(output_xyz)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    clean = []
+    for frame in frames:
+        if "momenta" in frame.arrays:
+            del frame.arrays["momenta"]
+        if not include_forces and "forces" in frame.arrays:
+            del frame.arrays["forces"]
+        clean.append(frame)
+
+    write(
+        output_xyz,
+        clean,
+        format="extxyz",
+        write_results=include_forces,
+    )
+
+
+def run_single_point(
+    input_xyz: str,
+    include_forces: bool = True,
+    checkpoint: str = DEFAULT_CHECKPOINT,
+) -> None:
+    """Compute a single-point energy (and forces) for the input structure."""
+    atoms = read(input_xyz)
+    print(f"Loaded structure with {len(atoms)} atoms")
+    setup_calculator(atoms, checkpoint)
+    energy = atoms.get_potential_energy()
+    print(f"Single-point energy: {energy:.6f} eV")
+    if include_forces:
+        forces = atoms.get_forces()
+        print("Forces (eV/A):")
+        for symbol, f in zip(atoms.get_chemical_symbols(), forces):
+            print(f"  {symbol:2s}  {f[0]:+12.6f}  {f[1]:+12.6f}  {f[2]:+12.6f}")
+
+
+def run_optimization(
+    input_xyz: str,
+    output_xyz: str,
+    fmax: float = 0.01,
+    max_steps: int = 500,
+    optimizer_name: str = "bfgs",
+    include_forces: bool = True,
+    checkpoint: str = DEFAULT_CHECKPOINT,
+) -> None:
+    """Optimize the geometry of the input structure with UMA."""
+    from ase.optimize import BFGS, FIRE
+
+    optimizers = {"bfgs": BFGS, "fire": FIRE}
+
+    atoms = read(input_xyz)
+    print(f"Loaded structure with {len(atoms)} atoms")
+    setup_calculator(atoms, checkpoint)
+
+    print(f"Initial energy: {atoms.get_potential_energy():.6f} eV")
+
+    optimizer_cls = optimizers.get(optimizer_name)
+    if optimizer_cls is None:
+        raise ValueError(f"Unknown optimizer: {optimizer_name}")
+
+    dyn = optimizer_cls(atoms, logfile=None)
+    converged = dyn.run(fmax=fmax, steps=max_steps)
+    print(f"Final energy: {atoms.get_potential_energy():.6f} eV")
+    print(f"Converged to fmax < {fmax} eV/A: {'yes' if converged else 'NO (max steps reached)'}")
+    print(f"Optimization steps: {dyn.nsteps}")
+
+    frame = atoms.copy()
+    if include_forces:
+        frame.arrays["forces"] = atoms.get_forces()
+    write_frames([frame], output_xyz, include_forces)
+    print(f"Optimized structure written to: {output_xyz}")
 
 
 def run_dynamics(
@@ -31,6 +131,8 @@ def run_dynamics(
     timestep: float = 1.0,
     temperature: float = 300.0,
     md_type: str = "langevin",
+    include_forces: bool = True,
+    checkpoint: str = DEFAULT_CHECKPOINT,
 ) -> None:
     """
     Run molecular dynamics on a structure using UMA ML potential.
@@ -42,21 +144,12 @@ def run_dynamics(
         timestep: Timestep in femtoseconds.
         temperature: Temperature in Kelvin.
         md_type: Type of MD ('verlet' or 'langevin').
+        include_forces: Write forces into the trajectory file.
     """
     # Load the structure
     atoms = read(input_xyz)
     print(f"Loaded structure with {len(atoms)} atoms")
-
-    # Set charge and spin for the UMA calculator (avoids warnings and potential errors)
-    atoms.info['charge'] = 0
-    atoms.info['spin'] = 1
-
-    # Set up the UMA calculator from Fairchem
-    # Uses HuggingFace API token from environment
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    predictor = pretrained_mlip.get_predict_unit("uma-s-1p2", device=device)
-    calculator = FAIRChemCalculator(predictor, task_name="omol")
-    atoms.calc = calculator
+    setup_calculator(atoms, checkpoint)
 
     # Verify calculator works by computing initial energy
     print(f"Initial energy: {atoms.get_potential_energy():.4f} eV")
@@ -86,34 +179,24 @@ def run_dynamics(
     # Create trajectory storage
     trajectory = []
 
-    def write_step():
-        """Callback to save each step with forces."""
-        # Get forces (negative gradients)
-        forces = atoms.get_forces()
-        # Store forces in arrays (not info) to avoid comparison issues
-        atoms.arrays['forces'] = forces
-        trajectory.append(atoms.copy())
+    def record_step():
+        """Callback to save each step."""
+        frame = atoms.copy()
+        if include_forces:
+            # Store forces in arrays (not info) to avoid comparison issues
+            frame.arrays["forces"] = atoms.get_forces()
+        trajectory.append(frame)
 
     # Attach callback
-    dyn.attach(write_step, interval=1)
+    dyn.attach(record_step, interval=1)
 
     # Run MD
     print(f"Running {md_type} MD for {steps} steps at {temperature}K")
     print(f"Timestep: {timestep} fs")
     dyn.run(steps)
 
-    # Write trajectory to XYZ with extended format including forces
-    output = Path(output_xyz)
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write as extended XYZ with positions and forces only
-    for frame in trajectory:
-        # Remove momentum array to keep output clean
-        if 'momenta' in frame.arrays:
-            del frame.arrays['momenta']
-
-    # Write all frames - forces array will be written as fx, fy, fz columns
-    write(output_xyz, trajectory, format='extxyz')
+    # Write trajectory to XYZ (extended format; forces optional)
+    write_frames(trajectory, output_xyz, include_forces)
 
     print(f"Trajectory written to: {output_xyz}")
     print(f"Total frames: {len(trajectory)}")
@@ -121,17 +204,34 @@ def run_dynamics(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run MD using UMA potential with ASE"
+        description="Single-point, optimization and MD with the UMA potential (ASE + Fairchem)"
     )
     parser.add_argument(
         "input_xyz",
-        help="Input XYZ file from segment 1",
+        help="Input XYZ file",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["sp", "opt", "md"],
+        default="md",
+        help="Calculation mode: single point, geometry optimization, or MD "
+        "(default: md)",
     )
     parser.add_argument(
         "-o",
         "--output",
         default="results/trajectory.xyz",
         help="Output trajectory XYZ file (default: results/trajectory.xyz)",
+    )
+    parser.add_argument(
+        "--no-forces",
+        action="store_true",
+        help="Do not write forces/gradients to the output file",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=DEFAULT_CHECKPOINT,
+        help="UMA checkpoint name (default: uma-s-1p2p1)",
     )
     parser.add_argument(
         "--steps",
@@ -157,6 +257,24 @@ def main():
         default="langevin",
         help="MD integrator type (default: langevin)",
     )
+    parser.add_argument(
+        "--fmax",
+        type=float,
+        default=0.01,
+        help="Force convergence criterion for opt (default: 0.01 eV/A)",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=500,
+        help="Maximum optimizer steps for opt (default: 500)",
+    )
+    parser.add_argument(
+        "--optimizer",
+        choices=["bfgs", "fire"],
+        default="bfgs",
+        help="Optimizer for opt (default: bfgs)",
+    )
 
     args = parser.parse_args()
 
@@ -169,14 +287,29 @@ def main():
         )
 
     try:
-        run_dynamics(
-            args.input_xyz,
-            args.output,
-            args.steps,
-            args.timestep,
-            args.temperature,
-            args.md_type,
-        )
+        if args.mode == "sp":
+            run_single_point(args.input_xyz, not args.no_forces)
+        elif args.mode == "opt":
+            run_optimization(
+                args.input_xyz,
+                args.output,
+                fmax=args.fmax,
+                max_steps=args.max_steps,
+                optimizer_name=args.optimizer,
+                include_forces=not args.no_forces,
+                checkpoint=args.checkpoint,
+            )
+        else:
+            run_dynamics(
+                args.input_xyz,
+                args.output,
+                args.steps,
+                args.timestep,
+                args.temperature,
+                args.md_type,
+                not args.no_forces,
+                args.checkpoint,
+            )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         traceback.print_exc()

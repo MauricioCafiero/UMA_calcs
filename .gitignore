@@ -1,0 +1,8 @@
+# virtual environment
+.venv/
+
+# python build artifacts
+__pycache__/
+
+# leftover untracked notebook (user: keep on disk, out of the repo)
+mace_training_archive/Frag_grow_test.ipynb

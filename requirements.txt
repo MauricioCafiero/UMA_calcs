@@ -1,0 +1,2 @@
+fairchem-core
+rdkit
