@@ -14,9 +14,13 @@
 
 2. **code/run_dynamics.py** - Segment 2: MD with UMA potential
    - Uses ASE with Fairchem FAIRChemCalculator
-   - UMA predictor: `pretrained_mlip.get_predict_unit("uma-s-1", device=device)`
+   - UMA predictor: `pretrained_mlip.get_predict_unit("uma-s-1p2", device=device)`
    - Supports Langevin (NVT) and Verlet (NVE) integrators
    - Writes extended XYZ with forces/gradients
+   - **Fixes applied:**
+     - Set `atoms.info['charge'] = 0` and `atoms.info['spin'] = 1` to avoid Fairchem warnings
+     - Store forces in `atoms.arrays` (not `atoms.info`) to avoid "ambiguous truth value" comparison error in Fairchem's `check_state()`
+     - Remove `momenta` array before writing to keep output clean (positions + forces only)
 
 3. **README.md** - Project documentation
 
@@ -44,4 +48,4 @@ python code/run_dynamics.py results/ethanol.xyz -o results/trajectory.xyz --step
 - `HF_TOKEN` environment variable must be set for HuggingFace
 
 ### Last Updated
-2026-04-19
+2026-04-21
