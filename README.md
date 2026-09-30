@@ -26,11 +26,18 @@ Create a virtual environment and install the requirements:
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 ```
+
+After activation, plain `python` in the commands below refers to the
+environment's interpreter.
 
 ## Setup
 
-Set your HuggingFace API token as an environment variable:
+Set your HuggingFace API token as an environment variable. Create a token
+at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens);
+your account must also have accepted the license on the
+[UMA model page](https://huggingface.co/facebook/UMA) (the weights are gated).
 
 ```bash
 export HF_TOKEN="your_token_here"
@@ -41,9 +48,11 @@ On Windows:
 set HF_TOKEN=your_token_here
 ```
 
-The UMA checkpoint is downloaded once and cached locally
-(`~/.cache/fairchem`, or the HuggingFace cache); later runs use the cached
-copy. The default checkpoint is `uma-s-1p2p1`.
+On the first run the UMA checkpoint (~2 GB) is downloaded once from
+HuggingFace and cached locally (`~/.cache/fairchem`, or the HuggingFace
+cache); later runs use the cached copy, including offline. If the token
+is missing or the license has not been accepted, the download fails with
+a permission error. The default checkpoint is `uma-s-1p2p1`.
 
 ## Usage
 
@@ -117,5 +126,6 @@ The final trajectory file contains:
 │   ├── smiles_to_xyz.py    # Segment 1: SMILES to 3D XYZ
 │   └── run_dynamics.py     # Segment 2: single point / optimization / MD
 ├── results/                 # Output files
+├── requirements.txt
 └── README.md
 ```
