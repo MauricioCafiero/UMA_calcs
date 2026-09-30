@@ -1,0 +1,4 @@
+# Normalize line endings: repo stores LF; OneDrive/Windows sync flips files to
+# CRLF, which pollutes `git status` and diffs. With this in place, git treats
+# CRLF/LF-only differences as no-change for text files.
+* text=auto
