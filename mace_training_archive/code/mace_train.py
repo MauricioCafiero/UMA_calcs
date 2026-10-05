@@ -56,6 +56,7 @@ def simpleMD(init_conf, temp, calc, fname, s, T):
 
     def write_frame():
             dyn.atoms.info['energy_mace'] = dyn.atoms.get_potential_energy()
+            dyn.atoms.info['temperature_mace'] = dyn.atoms.get_temperature()
             dyn.atoms.arrays['force_mace'] = dyn.atoms.calc.get_forces()
             dyn.atoms.write(fname, append=True)
             time_fs.append(dyn.get_time()/units.fs)
