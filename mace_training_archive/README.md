@@ -7,7 +7,8 @@ notebook remains in git history).
 - Accepts the student's own reference data (extended XYZ with energies and forces)
   plus an optional starting structure
 - Fine-tunes the MACE-MP-0 foundation model (`"small"`) on it, with a seeded
-  train/valid/test split
+  train/valid/test split and a Materials Project replay head
+  (`multiheads_finetuning`) so the foundation's general chemistry is retained
 - Runs a short MD simulation before and after fine-tuning with the same starting
   structure and conditions, and plots energy per atom and temperature for both models
 - Shows both trajectories in py3Dmol

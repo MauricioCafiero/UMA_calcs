@@ -3,7 +3,7 @@ stress_weight: 0.0
 forces_weight: 10.0
 energy_weight: 1.0
 foundation_model: "small"
-multiheads_finetuning: False
+multiheads_finetuning: True
 name: "finetuned_MACE"
 model_dir: "MACE_models"
 log_dir: "MACE_models"
